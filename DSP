@@ -1,0 +1,117 @@
+% Stress Detection in Voice Samples using DSP
+% CPDSPG30: DIGITAL SIGNAL PROCESSING
+% National University - Laguna
+
+clear; clc; close all;
+
+%% Load Voice Samples
+% Select your audio files (neutral and stressed)
+[neutralFile, neutralPath] = uigetfile('*.wav', 'Select NEUTRAL voice sample');
+[stressedFile, stressedPath] = uigetfile('*.wav', 'Select STRESSED voice sample');
+
+neutralSignal = audioread(fullfile(neutralPath, neutralFile));
+stressedSignal = audioread(fullfile(stressedPath, stressedFile));
+
+% If stereo, convert to mono
+if size(neutralSignal,2) > 1
+    neutralSignal = mean(neutralSignal,2);
+end
+if size(stressedSignal,2) > 1
+    stressedSignal = mean(stressedSignal,2);
+end
+
+% Sampling Frequency (Assuming same for both)
+fs = 44100; % Or change based on your audio properties
+
+%% Pre-processing
+% Normalize signals
+neutralSignal = neutralSignal / max(abs(neutralSignal));
+stressedSignal = stressedSignal / max(abs(stressedSignal));
+
+% Plot time domain signals
+figure;
+subplot(2,1,1);
+plot((1:length(neutralSignal))/fs, neutralSignal);
+title('Neutral Voice Signal (Time Domain)');
+xlabel('Time (s)');
+ylabel('Amplitude');
+
+subplot(2,1,2);
+plot((1:length(stressedSignal))/fs, stressedSignal);
+title('Stressed Voice Signal (Time Domain)');
+xlabel('Time (s)');
+ylabel('Amplitude');
+
+%% Feature Extraction
+% 1. Pitch Extraction using autocorrelation method
+pitchNeutral = estimatePitch(neutralSignal, fs);
+pitchStressed = estimatePitch(stressedSignal, fs);
+
+% 2. Frequency Deviation (using Short-Time Fourier Transform - STFT)
+[neutralFreqDev, neutralMeanFreq] = frequencyDeviation(neutralSignal, fs);
+[stressedFreqDev, stressedMeanFreq] = frequencyDeviation(stressedSignal, fs);
+
+%% Results
+fprintf('Neutral Pitch (mean): %.2f Hz\n', mean(pitchNeutral));
+fprintf('Stressed Pitch (mean): %.2f Hz\n', mean(pitchStressed));
+fprintf('Neutral Frequency Deviation: %.4f\n', neutralFreqDev);
+fprintf('Stressed Frequency Deviation: %.4f\n', stressedFreqDev);
+
+%% Visualization
+% Plot pitch contours
+tNeutral = linspace(0, length(neutralSignal)/fs, length(pitchNeutral));
+tStressed = linspace(0, length(stressedSignal)/fs, length(pitchStressed));
+
+figure;
+plot(tNeutral, pitchNeutral, 'b', 'LineWidth', 1.5); hold on;
+plot(tStressed, pitchStressed, 'r', 'LineWidth', 1.5);
+title('Pitch Contour Comparison');
+xlabel('Time (s)');
+ylabel('Pitch (Hz)');
+legend('Neutral', 'Stressed');
+grid on;
+
+%% Basic Stress Detection Logic
+if (mean(pitchStressed) > mean(pitchNeutral) * 1.1) && (stressedFreqDev > neutralFreqDev * 1.1)
+    disp('The stressed sample shows signs of stress based on pitch and frequency deviation.');
+else
+    disp('The stressed sample does not significantly differ from the neutral sample.');
+end
+
+%% Helper Functions
+
+function pitch = estimatePitch(signal, fs)
+    frameLength = round(0.03 * fs); % 30ms
+    frameShift = round(0.01 * fs);  % 10ms
+    numFrames = floor((length(signal) - frameLength) / frameShift) + 1;
+    pitch = zeros(1, numFrames);
+
+    for i = 1:numFrames
+        frame = signal((i-1)*frameShift + (1:frameLength));
+        autocorrVals = xcorr(frame);
+        autocorrMid = autocorrVals(length(frame):end);
+        [~, locs] = findpeaks(autocorrMid);
+        
+        if ~isempty(locs)
+            [~, idx] = max(autocorrMid(locs));
+            pitchPeriod = locs(idx);
+            pitch(i) = fs / pitchPeriod;
+        else
+            pitch(i) = 0; % No clear pitch detected
+        end
+    end
+end
+
+function [freqDeviation, meanFreq] = frequencyDeviation(signal, fs)
+    windowLength = round(0.05 * fs); % 50ms window
+    overlap = round(0.025 * fs);      % 50% overlap
+    [S,F,T] = spectrogram(signal, windowLength, overlap, [], fs);
+    magnitude = abs(S);
+
+    % Find dominant frequency for each time frame
+    [~,idx] = max(magnitude, [], 1);
+    dominantFreq = F(idx);
+
+    meanFreq = mean(dominantFreq);
+    freqDeviation = std(dominantFreq) / meanFreq;
+end
