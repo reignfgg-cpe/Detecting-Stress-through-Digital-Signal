@@ -1,0 +1,14 @@
+function flatness = spectralFlatness(signal, fs)
+    win = round(0.03 * fs);
+    hop = round(0.015 * fs);
+    [S, ~, ~] = buffer(signal, win, win-hop, 'nodelay');
+    N = size(S,2);
+    flatness = zeros(1,N);
+    for i = 1:N
+        frame = S(:,i);
+        spec = abs(fft(frame));
+        geoMean = exp(mean(log(spec+eps)));
+        arithMean = mean(spec);
+        flatness(i) = geoMean / (arithMean + eps);
+    end
+end
