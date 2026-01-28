@@ -1,0 +1,183 @@
+function stress_gui()
+    % Stress Detection GUI for Voice Samples
+    % Enhanced with updated stress detection features and simplified result display.
+
+    hFig = figure('Name','Stress Detection from Voice Samples', ...
+                  'Units','normalized', 'Position',[0.1 0.1 0.8 0.8], ...
+                  'NumberTitle','off', 'Resize','off');
+
+    uicontrol('Parent',hFig,'Style','text', ...
+              'String','Detecting Stress through Digital Signal Processing of Voice Samples', ...
+              'Units','normalized', 'Position',[0.1 0.95 0.8 0.04], ...
+              'FontSize',14, 'FontWeight','bold', 'HorizontalAlignment','center');
+
+    uicontrol('Parent',hFig,'Style','pushbutton', 'String','Load Audio (.wav)', 'FontSize',12, ...
+              'Units','normalized', 'Position',[0.05 0.9 0.2 0.05], 'Callback',@onLoadAudio);
+
+    uicontrol('Parent',hFig,'Style','pushbutton', 'String','Record Audio (5s)', 'FontSize',12, ...
+              'Units','normalized', 'Position',[0.28 0.9 0.2 0.05], 'Callback',@onRecordAudio);
+
+    handles.statusLabel = uicontrol('Parent',hFig,'Style','text', 'Units','normalized', ...
+                                    'Position',[0.5 0.9 0.45 0.05], 'FontSize',12, 'HorizontalAlignment','left');
+
+    handles.axPitch = axes('Parent',hFig,'Units','normalized', 'Position',[0.05 0.55 0.4 0.3]);
+    title(handles.axPitch,'Pitch Contour'); xlabel(handles.axPitch,'Frame'); ylabel(handles.axPitch,'Hz');
+
+    handles.axFreq = axes('Parent',hFig,'Units','normalized', 'Position',[0.55 0.55 0.4 0.3]);
+    title(handles.axFreq,'Dominant Frequency'); xlabel(handles.axFreq,'Frame'); ylabel(handles.axFreq,'Hz');
+
+    handles.axFlat = axes('Parent',hFig,'Units','normalized', 'Position',[0.3 0.1 0.4 0.3]);
+    title(handles.axFlat,'Spectral Flatness'); xlabel(handles.axFlat,'Frame'); ylabel(handles.axFlat,'Flatness');
+
+    uicontrol('Parent',hFig,'Style','text','String','Select Speaker Type:', ...
+              'Units','normalized','Position',[0.05 0.05 0.15 0.04],'FontSize',11);
+    handles.speakerPopup = uicontrol('Parent',hFig,'Style','popupmenu', ...
+              'String',{'Adult Male','Adult Female','Child'}, ...
+              'Units','normalized','Position',[0.21 0.05 0.15 0.05],'FontSize',11);
+
+    guidata(hFig, handles);
+
+    function onLoadAudio(~, ~)
+        handles = guidata(hFig);
+        [file, path] = uigetfile('*.wav','Select a WAV audio file');
+        if isequal(file,0), return; end
+        [x, fs] = audioread(fullfile(path, file));
+        processAudio(x, fs, handles, file);
+    end
+
+    function onRecordAudio(~, ~)
+        handles = guidata(hFig);
+        fs = 44100;
+        recObj = audiorecorder(fs, 16, 1);
+        handles.statusLabel.String = 'Recording for 5 seconds...';
+        recordblocking(recObj, 5);
+        x = getaudiodata(recObj);
+        processAudio(x, fs, handles, 'Recorded Audio');
+    end
+
+    function processAudio(x, fs, handles, label)
+        if size(x,2) > 1
+            x = mean(x,2);
+        end
+
+        % Pre-emphasis
+        x = filter([1 -0.97], 1, x);
+
+        % Normalize
+        x = x / max(abs(x));
+
+        % RMS-based silence removal
+        frameLen = round(0.02*fs);
+        frames = buffer(x, frameLen, 0, 'nodelay');
+        E = rms(frames);
+        voicedFrames = find(E > 0.1 * max(E));
+        if isempty(voicedFrames)
+            errordlg('No voiced segment detected. Try speaking louder or longer.','Processing Error');
+            return;
+        end
+        startIdx = (voicedFrames(1)-1)*frameLen + 1;
+        endIdx = min(voicedFrames(end)*frameLen, length(x));
+        x_voiced = x(startIdx:endIdx);
+
+        if length(x_voiced)/fs < 1
+            errordlg('Too short voiced segment. Try speaking louder or longer.');
+            return;
+        end
+
+        % Feature extraction
+        pitch = estimatePitch(x_voiced, fs);
+        pitch = medfilt1(pitch, 3);
+        validPitch = pitch(pitch > 50 & pitch < 500);
+        meanPitch = mean(validPitch);
+        stdPitch = std(validPitch);
+
+        [freqDev, domFreq] = frequencyDeviation(x_voiced, fs);
+        flatness = spectralFlatness(x_voiced, fs);
+        meanFlat = mean(flatness);
+
+        % Calculate pitch shift percentage from baseline per speaker type
+        selected = get(handles.speakerPopup, 'Value');
+        switch selected
+            case 1 % Adult Male
+                baselinePitch = 107.5;
+                pitchShiftThreshold = 0.20; % 20%
+                stdDevThreshold = 30;
+                flatnessThreshold = 0.5;
+            case 2 % Adult Female
+                baselinePitch = 210;
+                pitchShiftThreshold = 0.20; % 20%
+                stdDevThreshold = 30;
+                flatnessThreshold = 0.5;
+            case 3 % Child
+                baselinePitch = 325;
+                pitchShiftThreshold = 0.15; % 15%
+                stdDevThreshold = 30;
+                flatnessThreshold = 0.5;
+        end
+
+        pitchShiftPercent = abs(meanPitch - baselinePitch) / baselinePitch;
+
+        % Classification logic based on updated feature thresholds
+        if (pitchShiftPercent > pitchShiftThreshold) && (stdPitch > stdDevThreshold) && (meanFlat > flatnessThreshold)
+            result = 'STRESSED';
+        else
+            result = 'NEUTRAL';
+        end
+
+        % Plotting
+        axes(handles.axPitch); cla(handles.axPitch);
+        plot(pitch, 'LineWidth',1.2); title('Pitch Contour'); xlabel('Frame'); ylabel('Hz'); grid on;
+
+        axes(handles.axFreq); cla(handles.axFreq);
+        plot(domFreq, 'LineWidth',1.2); title('Dominant Frequency'); xlabel('Frame'); ylabel('Hz'); grid on;
+
+        axes(handles.axFlat); cla(handles.axFlat);
+        plot(flatness, 'LineWidth',1.2); title('Spectral Flatness'); xlabel('Frame'); ylabel('Flatness'); grid on;
+
+        % Show only mean pitch, frequency deviation, and spectral flatness in result area
+        msg = sprintf('Result: %s | Mean Pitch: %.2f Hz | Frequency Deviation: %.3f | Spectral Flatness: %.3f', ...
+                      result, meanPitch, freqDev, meanFlat);
+        handles.statusLabel.String = msg;
+    end
+end
+
+function pitch = estimatePitch(signal, fs)
+    frameLen = round(0.03*fs); shift = round(0.01*fs);
+    numFrames = floor((length(signal)-frameLen)/shift)+1;
+    pitch = zeros(1,numFrames);
+    for i=1:numFrames
+        frame = signal((i-1)*shift + (1:frameLen));
+        ac = xcorr(frame);
+        ac = ac(frameLen:end);
+        [pks, locs] = findpeaks(ac);
+        if ~isempty(locs)
+            [~, idx] = max(pks);
+            pitch(i) = fs/locs(idx);
+        else
+            pitch(i) = 0;
+        end
+    end
+end
+
+function [deviation, domFreq] = frequencyDeviation(signal, fs)
+    win = round(0.05*fs); hop = round(0.025*fs);
+    [S,F,~] = spectrogram(signal, win, win-hop, [], fs);
+    mag = abs(S);
+    [~, idx] = max(mag, [], 1);
+    domFreq = F(idx);
+    deviation = std(domFreq)/mean(domFreq);
+end
+
+function flatness = spectralFlatness(signal, fs)
+    win = round(0.03*fs); hop = round(0.015*fs);
+    buf = buffer(signal, win, win-hop, 'nodelay');
+    N = size(buf,2);
+    flatness = zeros(1,N);
+    for i=1:N
+        frame = buf(:,i);
+        spec = abs(fft(frame));
+        geo = exp(mean(log(spec+eps)));
+        arith = mean(spec);
+        flatness(i) = geo/(arith+eps);
+    end
+end
