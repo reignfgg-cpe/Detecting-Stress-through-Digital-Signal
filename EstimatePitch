@@ -1,0 +1,18 @@
+function pitch = estimatePitch(signal, fs)
+    frameLen = round(0.03 * fs);
+    frameShift = round(0.01 * fs);
+    numFrames = floor((length(signal) - frameLen)/frameShift);
+    pitch = zeros(1, numFrames);
+    for i = 1:numFrames
+        frame = signal((i-1)*frameShift + (1:frameLen));
+        ac = xcorr(frame);
+        ac = ac(length(frame):end);
+        [~, locs] = findpeaks(ac);
+        if ~isempty(locs)
+            pitchPeriod = locs(1);
+            pitch(i) = fs / pitchPeriod;
+        else
+            pitch(i) = 0;
+        end
+    end
+end
