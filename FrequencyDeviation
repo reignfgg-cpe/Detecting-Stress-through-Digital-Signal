@@ -1,0 +1,9 @@
+function [deviation, domFreq] = frequencyDeviation(signal, fs)
+    win = round(0.05 * fs);
+    hop = round(0.025 * fs);
+    [S,F,~] = spectrogram(signal, win, win-hop, [], fs);
+    mag = abs(S);
+    [~, idx] = max(mag);
+    domFreq = F(idx);
+    deviation = std(domFreq) / mean(domFreq);
+end
